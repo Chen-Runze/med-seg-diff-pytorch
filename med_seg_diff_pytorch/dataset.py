@@ -29,10 +29,10 @@ class ISICDataset(Dataset):
         img_path = os.path.join(self.data_path, self.img_folder, name)
 
         mask_name = name.split('.')[0] + '_Segmentation.png'
-        msk_path = os.path.join(self.data_path, self.img_folder, mask_name)
+        mask_path = os.path.join(self.data_path, self.img_folder, mask_name)
 
         img = Image.open(img_path).convert('RGB')
-        mask = Image.open(msk_path).convert('L')
+        mask = Image.open(mask_path).convert('L')
 
         if self.training:
             label = 0 if self.label_list[index] == 'benign' else 1

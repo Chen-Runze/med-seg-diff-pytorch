@@ -494,12 +494,17 @@ class MedSegDiff(nn.Module):
     ):
         super().__init__()
 
-        self.model = model
+        # self.model = model
+        # print(self.model.__class__)     # <class 'torch.nn.parallel.distributed.DistributedDataParallel'>
+        # AttributeError: 'DistributedDataParallel' object has no attribute 'input_img_channels'/'image_size'
+
+        self.model = model.module
+        # print(self.model.__class__)     # <class 'med_seg_diff_pytorch.med_seg_diff_pytorch.Unet'>
         self.input_img_channels = self.model.input_img_channels
         self.mask_channels = self.model.mask_channels
         self.self_condition = self.model.self_condition
 
-        self.image_size = model.image_size
+        self.image_size = self.model.image_size
 
         self.objective = objective
 

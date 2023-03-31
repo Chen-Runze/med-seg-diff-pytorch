@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument('-rt', '--report_to', type=str, default="wandb", choices=["wandb"],
                         help="Where to log to. Currently only supports wandb")
     parser.add_argument('-ld', '--logging_dir', type=str, default="logs", help="Logging dir.")
-    parser.add_argument('-od', '--output_dir', type=str, default="output", help="Output dir.")
+    parser.add_argument('-od', '--output_dir', type=str, default="./io/output", help="Output dir.")
     parser.add_argument('-mp', '--mixed_precision', type=str, default="no", choices=["no", "fp16", "bf16"],
                         help="Whether to do mixed precision")
     parser.add_argument('-ga', '--gradient_accumulation_steps', type=int, default=4,
@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument('-e', '--epochs', type=int, default=10000, help='number of epochs (default: 10000)')
     parser.add_argument('-bs', '--batch_size', type=int, default=8, help='batch size to train on (default: 8)')
     parser.add_argument('--timesteps', type=int, default=1000, help='number of timesteps (default: 1000)')
-    parser.add_argument('-ds', '--dataset', default='generic', help='Dataset to use')
+    parser.add_argument('-ds', '--dataset', default='ISIC', help='Dataset to use')
     parser.add_argument('--save_every', type=int, default=100, help='save_every n epochs (default: 100)')
     parser.add_argument('--load_model_from', default=None, help='path to pt file to load from')
     return parser.parse_args()
@@ -78,8 +78,44 @@ def load_data(args):
 
 def main():
     args = parse_args()
-    checkpoint_dir = os.path.join(args.output_dir, 'checkpoints')
-    logging_dir = os.path.join(args.output_dir, args.logging_dir)
+
+    def ns_to_dict(namespace):
+        """
+        Convert an argparse.Namespace object to a dictionary.
+
+        Args:
+            namespace (argparse.Namespace): the Namespace object to convert
+
+        Returns:
+            dict: a dictionary with the same keys and values as the Namespace object,
+                with nested dictionaries created for keys containing a period ('.')
+        """
+        items = vars(namespace)
+        result = {}
+        for key, value in items.items():
+            if '.' in key:
+                prefix, suffix = key.split('.', 1)
+                if prefix not in result:
+                    result[prefix] = argparse.Namespace()
+                setattr(result[prefix], suffix, value)
+            else:
+                result[key] = value
+        for key, value in result.items():
+            if isinstance(value, argparse.Namespace):
+                result[key] = ns_to_dict(value)
+        return result
+    
+    from mmcv.utils import Config
+    config_file = f'config/{args.dataset}.py'
+    cfg_dict_from_file, cfg_text = Config._file2dict(filename=config_file, use_predefined_variables=True)
+
+    cfg_from_args = Config(ns_to_dict(args), cfg_text='ns_to_dict', filename='dump_to.py')
+    cfg_from_args.merge_from_dict(cfg_dict_from_file)
+    args = cfg_from_args
+
+    import time; current_time = time.strftime('%Y-%m-%d@%H-%M')
+    checkpoint_dir = os.path.join(args.output_dir, current_time, 'checkpoints')
+    logging_dir = os.path.join(args.output_dir, current_time, args.logging_dir)
     os.makedirs(checkpoint_dir, exist_ok=True)
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -89,12 +125,13 @@ def main():
     )
     if accelerator.is_main_process:
         accelerator.init_trackers("med-seg-diff", config=vars(args))
+        args.dump(file=os.path.join(args.output_dir, current_time, 'config.py'))
 
     ## DEFINE MODEL ##
     model = Unet(
         dim=args.dim,
         image_size=args.image_size,
-        dim_mults=(1, 2, 4, 8),
+        dim_mults=args.dim_mults,
         mask_channels=args.mask_channels,
         input_img_channels=args.input_img_channels,
         self_condition=args.self_condition
@@ -158,7 +195,8 @@ def main():
         print('Training Loss : {:.4f}'.format(epoch_loss))
         ## INFERENCE ##
 
-        if epoch % args.save_every == 0:
+        if accelerator.is_main_process and epoch % args.save_every == 0:
+        # if epoch % args.save_every == 0:
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': diffusion.model.state_dict(),
@@ -168,11 +206,17 @@ def main():
 
             pred = diffusion.sample(img).cpu().detach().numpy()
 
+            # if accelerator.is_main_process: proc_id = 'main_process'; print('main_process, pass')
+            # else: proc_id = 'sub_process'; print('sub_process, sleep(5)'); import time; time.sleep(5)
+            # print(f'---- {proc_id} begin ----')
+            # AttributeError: 'Accelerator' object has no attribute 'trackers'
+            # print(accelerator.__class__)        # <class 'accelerate.accelerator.Accelerator'>
             for tracker in accelerator.trackers:
+                # print(f'---- {proc_id} end ----')
                 if tracker.name == "wandb":
                     # save just one image per batch
                     tracker.log(
-                        {'pred-img-mask': [wandb.Image(pred[0, 0, :, :]), wandb.Image(img[0, 0, :, :]),
+                        {'pred-img-mask': [wandb.Image(pred[0, 0, :, :]), wandb.Image(img[0, :, :, :]),
                                            wandb.Image(mask[0, 0, :, :])]}
                     )
 
