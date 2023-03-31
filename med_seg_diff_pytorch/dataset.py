@@ -45,8 +45,7 @@ class NYUv2Dataset(Dataset):
             self.sample_list = json_data[mode]
 
     def __len__(self):
-        # return len(self.sample_list)
-        return 43
+        return len(self.sample_list)
 
     def __getitem__(self, idx):
         """Get the images"""

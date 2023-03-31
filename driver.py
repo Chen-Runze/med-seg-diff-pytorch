@@ -75,7 +75,7 @@ def load_data(args):
         batch_size=args.batch_size,
         shuffle=True)
 
-    return training_generator
+    return dataset, training_generator
 
 
 def main():
@@ -140,7 +140,7 @@ def main():
     )
 
     ## LOAD DATA ##
-    data_loader = load_data(args)
+    dataset, data_loader = load_data(args)
     # training_generator = tqdm(data_loader, total=int(len(data_loader)))
     if args.scale_lr:
         args.learning_rate = (
@@ -165,7 +165,6 @@ def main():
         )
 
     ## TRAIN MODEL ##
-    counter = 0
     model, optimizer, data_loader = accelerator.prepare(
         model, optimizer, data_loader
     )
@@ -191,9 +190,8 @@ def main():
                 accelerator.backward(loss)
                 optimizer.step()
                 optimizer.zero_grad()
-        running_loss += loss.item() * img.size(0)
-        counter += 1
-        epoch_loss = running_loss / len(data_loader)
+            running_loss += loss.item() * img.size(0)
+        epoch_loss = running_loss / len(dataset)
         print('Training Loss : {:.4f}'.format(epoch_loss))
         ## INFERENCE ##
 
