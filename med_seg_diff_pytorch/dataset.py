@@ -9,6 +9,86 @@ import random
 import torchvision.transforms.functional as F
 
 
+import json
+import h5py
+import torchvision.transforms as T
+
+
+class NYUv2Dataset(Dataset):
+    # A workaround for a pytorch bug: https://github.com/pytorch/vision/issues/2194
+    class ToNumpy:
+        def __call__(self, sample):
+            return np.array(sample)
+    
+    def __init__(self, args, mode, flip_p=0.5):
+        super().__init__()
+
+        self.args = args
+        self.mode = mode
+        self.flip_p = flip_p
+
+        if mode != 'train' and mode != 'val' and mode != 'test':
+            raise NotImplementedError
+
+        # For NYUDepthV2, crop size is fixed
+        height, width = (240, 320)
+        # crop_size = (228, 304)
+        crop_size = (self.args.image_size, self.args.image_size)
+        
+
+        self.height = height
+        self.width = width
+        self.crop_size = crop_size
+
+        with open(self.args.split_json) as json_file:
+            json_data = json.load(json_file)
+            self.sample_list = json_data[mode]
+
+    def __len__(self):
+        # return len(self.sample_list)
+        return 43
+
+    def __getitem__(self, idx):
+        """Get the images"""
+        path_file = os.path.join(self.args.data_path, self.sample_list[idx]['filename'])
+
+        f = h5py.File(path_file, 'r')
+        rgb_h5 = f['rgb'][:].transpose(1, 2, 0)
+        dep_h5 = f['depth'][:]
+
+        rgb = Image.fromarray(rgb_h5, mode='RGB')
+        dep = Image.fromarray(dep_h5.astype('float32'), mode='F')
+
+        t_rgb = T.Compose([
+            T.Resize(self.height),
+            T.CenterCrop(self.crop_size),
+            T.ToTensor()
+            # T.ToTensor(),
+            # T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+        ])
+
+        t_dep = T.Compose([
+            T.Resize(self.height),
+            T.CenterCrop(self.crop_size),
+            self.ToNumpy(),
+            T.ToTensor()
+        ])
+
+        rgb = t_rgb(rgb)
+        dep = t_dep(dep)
+
+        if random.random() < self.flip_p:
+            rgb = F.vflip(rgb)
+            dep = F.vflip(dep)
+
+        # dep_sp = self.get_sparse_depth(dep, self.args.num_sample)
+        # output = {'rgb': rgb, 'dep': dep_sp, 'gt': dep, 'K': K}
+
+        return (rgb, dep)
+
+    def get_sparse_depth(self, dep, num_sample): pass
+
+
 class ISICDataset(Dataset):
     def __init__(self, data_path, csv_file, img_folder, transform=None, training=True, flip_p=0.5):
         df = pd.read_csv(os.path.join(data_path, csv_file), encoding='gbk')

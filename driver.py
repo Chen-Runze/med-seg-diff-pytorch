@@ -7,7 +7,7 @@ import torchvision.transforms as transforms
 from torch.optim import AdamW
 from lion_pytorch import Lion
 from med_seg_diff_pytorch import Unet, MedSegDiff
-from med_seg_diff_pytorch.dataset import ISICDataset, GenericNpyDataset
+from med_seg_diff_pytorch.dataset import ISICDataset, GenericNpyDataset, NYUv2Dataset
 from accelerate import Accelerator
 import wandb
 
@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument('-e', '--epochs', type=int, default=10000, help='number of epochs (default: 10000)')
     parser.add_argument('-bs', '--batch_size', type=int, default=8, help='batch size to train on (default: 8)')
     parser.add_argument('--timesteps', type=int, default=1000, help='number of timesteps (default: 1000)')
-    parser.add_argument('-ds', '--dataset', default='ISIC', help='Dataset to use')
+    parser.add_argument('-ds', '--dataset', default='NYUv2', help='Dataset to use')
     parser.add_argument('--save_every', type=int, default=100, help='save_every n epochs (default: 100)')
     parser.add_argument('--load_model_from', default=None, help='path to pt file to load from')
     return parser.parse_args()
@@ -55,7 +55,9 @@ def parse_args():
 
 def load_data(args):
     # Load dataset
-    if args.dataset == 'ISIC':
+    if args.dataset == 'NYUv2':
+        dataset = NYUv2Dataset(args=args, mode='val')
+    elif args.dataset == 'ISIC':
         transform_list = [transforms.Resize((args.image_size, args.image_size)), transforms.ToTensor(), ]
         transform_train = transforms.Compose(transform_list)
         dataset = ISICDataset(args.data_path, args.csv_file, args.img_folder, transform=transform_train, training=True,
