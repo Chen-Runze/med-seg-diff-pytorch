@@ -233,7 +233,7 @@ class Transformer(nn.Module):
 class Conditioning(nn.Module):
     def __init__(self, fmap_size, dim):
         super().__init__()
-        self.ff_parser_attn_map = nn.Parameter(torch.ones(dim, fmap_size, fmap_size))
+        self.ff_parser_attn_map = nn.Parameter(torch.ones(dim, *fmap_size))
 
         self.norm_input = LayerNorm(dim, bias = True)
         self.norm_condition = LayerNorm(dim, bias = True)
@@ -353,7 +353,7 @@ class Unet(nn.Module):
             ]))
 
             if not is_last:
-                curr_fmap_size //= 2
+                curr_fmap_size = tuple(size_dim//2 for size_dim in curr_fmap_size)
 
         # middle blocks
 
@@ -498,7 +498,7 @@ class MedSegDiff(nn.Module):
         # print(self.model.__class__)     # <class 'torch.nn.parallel.distributed.DistributedDataParallel'>
         # AttributeError: 'DistributedDataParallel' object has no attribute 'input_img_channels'/'image_size'
 
-        self.model = model.module
+        self.model = model if __name__ == '__main__' else model.module
         # print(self.model.__class__)     # <class 'med_seg_diff_pytorch.med_seg_diff_pytorch.Unet'>
         self.input_img_channels = self.model.input_img_channels
         self.mask_channels = self.model.mask_channels
@@ -698,7 +698,7 @@ class MedSegDiff(nn.Module):
 
         image_size, mask_channels = self.image_size, self.mask_channels
         sample_fn = self.p_sample_loop if not self.is_ddim_sampling else self.ddim_sample
-        return sample_fn((batch_size, mask_channels, image_size, image_size), cond_img)
+        return sample_fn((batch_size, mask_channels, *image_size), cond_img)
 
     def q_sample(self, x_start, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
@@ -755,9 +755,9 @@ class MedSegDiff(nn.Module):
         device = self.device
         img, cond_img = img.to(device), cond_img.to(device)
 
-        b, c, h, w, device, img_size, img_channels, mask_channels = *img.shape, img.device, self.image_size, self.input_img_channels, self.mask_channels
+        b, c, h, w, device, img_channels, mask_channels = *img.shape, img.device, self.input_img_channels, self.mask_channels
 
-        assert h == img_size and w == img_size, f'height and width of image must be {img_size}'
+        assert h == self.image_size[0] and w == self.image_size[1], f'height and width of image must be {self.image_size}'
         assert cond_img.shape[1] == img_channels, f'your input medical must have {img_channels} channels'
         assert img.shape[1] == mask_channels, f'the segmented image must have {mask_channels} channels'
 
@@ -765,3 +765,49 @@ class MedSegDiff(nn.Module):
 
         img = normalize_to_neg_one_to_one(img)
         return self.p_losses(img, times, cond_img, *args, **kwargs)
+
+
+if __name__ == '__main__':
+    import os
+    top_dir = os.path.abspath(__file__).rsplit("/", 2)[0]
+    os.chdir(top_dir)
+    # import sys; sys.path.append(top_dir)
+
+
+if __name__ == '__main__':
+    print("Test in File 'med_seg_diff_pytorch/med_seg_diff_pytorch.py'")
+    
+    config_file = './config/NYUv2.py'
+    from mmcv.utils import Config
+    args = Config.fromfile(config_file)
+    args.batch_size = 1
+
+    # Define model
+    model = Unet(
+        dim=args.dim,
+        image_size=args.image_size,
+        dim_mults=args.dim_mults,
+        mask_channels=args.mask_channels,
+        input_img_channels=args.input_img_channels,
+        self_condition=args.self_condition
+    )
+    device = torch.device(f'cuda:0')
+    model = model.to(device)
+    
+    diffusion = MedSegDiff(
+        model,
+        timesteps=args.timesteps
+    ).to(device)
+
+    # Define PyTorch dataset and dataloader
+    from dataset import NYUv2Dataset
+    dataset = NYUv2Dataset(args=args, mode='val')
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True)
+
+    for i, (img, mask) in enumerate(data_loader):
+        loss = diffusion(mask, img)
+        break   # 若 batch_size 已设为最大,则不加此句会报错 (前三个iter0~2均会增加显存占用,后续iter不会,原因不明)
+        print(f"Iter {i} End. Sleep for 5 secs..."); import time; time.sleep(5)

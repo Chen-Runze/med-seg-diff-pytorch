@@ -30,15 +30,11 @@ class NYUv2Dataset(Dataset):
         if mode != 'train' and mode != 'val' and mode != 'test':
             raise NotImplementedError
 
-        # For NYUDepthV2, crop size is fixed
+        # For NYUDepthV2, crop size is fixed to (228, 304)
         height, width = (240, 320)
-        # crop_size = (228, 304)
-        crop_size = (self.args.image_size, self.args.image_size)
-        
-
         self.height = height
         self.width = width
-        self.crop_size = crop_size
+        self.crop_size = self.args.image_size
 
         with open(self.args.split_json) as json_file:
             json_data = json.load(json_file)
