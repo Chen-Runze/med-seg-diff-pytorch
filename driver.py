@@ -144,6 +144,23 @@ def main():
         optimizer.load_state_dict(save_dict['optimizer_state_dict'])
         accelerator.print(f'Loaded from {args.load_model_from}')
 
+    print(accelerator.distributed_type)     # DistributedType.MULTI_GPU
+    print(data_loader.__class__)            # <class 'accelerate.data_loader.DataLoaderShard'>
+    print(data_loader.__dir__())
+    # ['dataset', 'num_workers', 'prefetch_factor', 'pin_memory', 'timeout', 'worker_init_fn',
+    #  '_DataLoader__multiprocessing_context', '_dataset_kind', 'batch_size', 'drop_last', 'sampler',
+    #  'batch_sampler', 'generator', 'collate_fn', 'persistent_workers', '_DataLoader__initialized',
+    #  '_IterableDataset_len_called', '_iterator', 'device', 'rng_types', 'synchronized_generator',
+    #  'skip_batches', 'gradient_state', '__module__', '__doc__', '__init__', '__iter__', 'total_batch_size',
+    #  'total_dataset_length', '__parameters__', '__annotations__', '_get_iterator', 'multiprocessing_context',
+    #  '__setattr__', '_auto_collation', '_index_sampler', '__len__', 'check_worker_number_rationality',
+    #  '__orig_bases__', '__dict__', '__weakref__', '__slots__', '_is_protocol', '__class_getitem__',
+    #  '__init_subclass__', '__repr__', '__hash__', '__str__', '__getattribute__', '__delattr__', '__lt__',
+    #  '__le__', '__eq__', '__ne__', '__gt__', '__ge__', '__new__', '__reduce_ex__', '__reduce__',
+    #  '__subclasshook__', '__format__', '__sizeof__', '__dir__', '__class__']
+    print(data_loader.sampler.__class__)    # <class 'torch.utils.data.sampler.SequentialSampler'>
+    print(data_loader.batch_sampler.__class__)  # <class 'accelerate.data_loader.BatchSamplerShard'>
+
     ## Iterate across training loop
     for epoch in range(args.epochs):
         running_loss = 0.0; counter = 0
@@ -156,7 +173,9 @@ def main():
                 optimizer.step()
                 optimizer.zero_grad()
             running_loss += loss.item() * img.size(0); counter +=img.size(0)
+            print(f"img.size()={img.size()}")
         epoch_loss = running_loss / counter
+        print(f"counter={counter}, len(dataset)={len(dataset)}")
         print(f"Epoch {epoch+1}/{args.epochs} End. Average Training Loss: {epoch_loss:.4f}")
         
         ## SAVE CHECKPOINT ##
