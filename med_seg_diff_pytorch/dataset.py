@@ -57,9 +57,9 @@ class NYUv2Dataset(Dataset):
         t_rgb = T.Compose([
             T.Resize(self.height),
             T.CenterCrop(self.crop_size),
-            T.ToTensor()
-            # T.ToTensor(),
-            # T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+            # T.ToTensor()
+            T.ToTensor(),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         ])
 
         t_dep = T.Compose([
@@ -72,16 +72,32 @@ class NYUv2Dataset(Dataset):
         rgb = t_rgb(rgb)
         dep = t_dep(dep)
 
-        if random.random() < self.flip_p:
-            rgb = F.vflip(rgb)
-            dep = F.vflip(dep)
+        # if random.random() < self.flip_p:
+        #     rgb = F.vflip(rgb)
+        #     dep = F.vflip(dep)
 
-        # dep_sp = self.get_sparse_depth(dep, self.args.num_sample)
+        dep_sp = self.get_sparse_depth(dep, self.args.num_sample)
+        rgbd = torch.cat((rgb,dep_sp), 0)
         # output = {'rgb': rgb, 'dep': dep_sp, 'gt': dep, 'K': K}
 
-        return (rgb, dep)
+        return (rgbd, dep)
 
-    def get_sparse_depth(self, dep, num_sample): pass
+    def get_sparse_depth(self, dep, num_sample):
+        channel, height, width = dep.shape
+        assert channel == 1
+
+        idx_nnz = torch.nonzero(dep.view(-1) > 0.0001, as_tuple=False)
+        num_idx = len(idx_nnz)
+        idx_sample = torch.randperm(num_idx)[:num_sample]
+        idx_nnz = idx_nnz[idx_sample[:]]
+
+        mask = torch.zeros((channel*height*width))
+        mask[idx_nnz] = 1.0
+        mask = mask.view((channel, height, width))
+
+        dep_sp = dep * mask.type_as(dep)
+
+        return dep_sp
 
 
 class ISICDataset(Dataset):
