@@ -11,6 +11,12 @@ from med_seg_diff_pytorch.dataset import ISICDataset, GenericNpyDataset, NYUv2Da
 from accelerate import Accelerator
 import wandb
 
+# import sys; sys.path.append(f"/home/{os.getlogin()}/code/NLSPN_ECCV20/")
+# from summary import get as get_summary
+# from metric import get as get_metric
+import sys; sys.path.append(f"/home/{os.getlogin()}/code/PENet_ICRA2021/")
+import criteria
+
 ## Parse CLI arguments ##
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -21,7 +27,9 @@ def parse_args():
 def load_data(args):
     # Load dataset
     if args.dataset == 'NYUv2':
-        dataset = NYUv2Dataset(args=args, mode='val')
+        dataset_train = NYUv2Dataset(args=args, mode='train')
+        dataset_val = NYUv2Dataset(args=args, mode='val')
+        dataset_test = NYUv2Dataset(args=args, mode='test')
     elif args.dataset == 'ISIC':
         transform_list = [transforms.Resize(args.image_size), transforms.ToTensor(), ]
         transform_train = transforms.Compose(transform_list)
@@ -35,12 +43,10 @@ def load_data(args):
         raise NotImplementedError(f"Your dataset {args.dataset} hasn't been implemented yet.")
 
     ## Define PyTorch data generator
-    training_generator = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True)
-
-    return dataset, training_generator
+    loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size, shuffle=True)
+    loader_val = torch.utils.data.DataLoader(dataset_val, batch_size=args.batch_size, shuffle=False)
+    loader_test = torch.utils.data.DataLoader(dataset_test, batch_size=args.batch_size, shuffle=False) if dataset_test else None
+    return {"loader_train": loader_train, "loader_val": loader_val, "loader_test": loader_test}
 
 
 def main():
@@ -72,9 +78,10 @@ def main():
                 result[key] = ns_to_dict(value)
         return result
     
-    from mmcv.utils import Config
+    # from mmcv.utils import Config
+    from mmengine.config import Config
     config_file = f'config/{args.dataset}.py'
-    cfg_dict_from_file, cfg_text = Config._file2dict(filename=config_file, use_predefined_variables=True)
+    cfg_dict_from_file, cfg_text, _ = Config._file2dict(filename=config_file, use_predefined_variables=True)
 
     cfg_from_args = Config(ns_to_dict(args), cfg_text='ns_to_dict', filename='dump_to.py')
     cfg_from_args.merge_from_dict(cfg_dict_from_file)
@@ -105,8 +112,11 @@ def main():
     )
 
     ## LOAD DATA ##
-    dataset, data_loader = load_data(args)
-    # training_generator = tqdm(data_loader, total=int(len(data_loader)))
+    data_loader = load_data(args)
+    loader_train = data_loader["loader_train"]
+    loader_val = data_loader["loader_val"]
+    loader_test = data_loader["loader_test"]
+
     if args.scale_lr:
         args.learning_rate = (
                 args.learning_rate * args.gradient_accumulation_steps * args.batch_size * accelerator.num_processes
@@ -130,8 +140,8 @@ def main():
         )
 
     ## TRAIN MODEL ##
-    model, optimizer, data_loader = accelerator.prepare(
-        model, optimizer, data_loader
+    model, optimizer, loader_train = accelerator.prepare(
+        model, optimizer, loader_train
     )
     diffusion = MedSegDiff(
         model,
@@ -144,47 +154,91 @@ def main():
         optimizer.load_state_dict(save_dict['optimizer_state_dict'])
         accelerator.print(f'Loaded from {args.load_model_from}')
 
+    ## Test only ##
+    if args.test_only:
+        # do sth
+        pass
+        # return
+
     ## Iterate across training loop
     for epoch in range(args.epochs):
+        print("-"*30 + f"Epoch {epoch+1}/{args.epochs} Start...")
+
+        ## TRAIN ##
+        cur_mode = 'train'
+        print("Training")
+
         running_loss = 0.0; counter = 0
-        print(f"Epoch {epoch+1}/{args.epochs} Start...")
-        for (img, mask) in tqdm(data_loader):
+        for (img, mask) in tqdm(loader_train):
             with accelerator.accumulate(model):
                 loss = diffusion(mask, img)
-                accelerator.log({'loss': loss})  # Log loss to wandb
+                accelerator.log({'train_loss': loss})  # Log loss to wandb
                 accelerator.backward(loss)
                 optimizer.step()
                 optimizer.zero_grad()
             running_loss += loss.item() * img.size(0); counter +=img.size(0)
         epoch_loss = running_loss / counter
-        print(f"Epoch {epoch+1}/{args.epochs} End. Average Training Loss: {epoch_loss:.4f}")
+        print(f"Epoch {epoch+1}/{args.epochs} Training End. Average Training Loss: {epoch_loss:.4f}")
         
         ## SAVE CHECKPOINT ##
-        if accelerator.is_main_process and epoch % args.save_every == 0:
-        # if epoch % args.save_every == 0:
+        if accelerator.is_main_process and (epoch+1) % args.save_every == 0:
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': diffusion.model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': loss,
             }, os.path.join(checkpoint_dir, f'state_dict_epoch_{epoch}_loss_{epoch_loss}.pt'))
-
-            ## INFERENCE ##
-            pred = diffusion.sample(img).cpu().detach().numpy()
-
-            # if accelerator.is_main_process: proc_id = 'main_process'; print('main_process, pass')
-            # else: proc_id = 'sub_process'; print('sub_process, sleep(5)'); import time; time.sleep(5)
-            # print(f'---- {proc_id} begin ----')
-            # AttributeError: 'Accelerator' object has no attribute 'trackers'
-            # print(accelerator.__class__)        # <class 'accelerate.accelerator.Accelerator'>
+            
+            # save one image per batch
+            pred = diffusion.sample(img).cpu().detach().numpy() # inference
             for tracker in accelerator.trackers:
-                # print(f'---- {proc_id} end ----')
                 if tracker.name == "wandb":
-                    # save just one image per batch
                     tracker.log(
-                        {'pred-img-mask': [wandb.Image(pred[0, 0, :, :]), wandb.Image(img[0, :, :, :]),
+                        {f'{cur_mode}_pred-img-mask': [wandb.Image(pred[0, 0, :, :]), wandb.Image(img[0, :3, :, :]),
                                            wandb.Image(mask[0, 0, :, :])]}
                     )
+        
+
+        ## EVALUATION ##
+        ## TEST ##
+        loader_eval = loader_test
+        if accelerator.is_main_process and (epoch+1) % args.eval_every == 0:
+            cur_mode = 'val'
+            print("Evaluation")
+
+            torch.set_grad_enabled(False)
+            diffusion.eval()
+
+            running_metric = 0.0; counter = 0
+            for (img, mask) in tqdm(loader_eval):
+                pred = diffusion.sample(img)    # inference
+                accelerator.log({f'{cur_mode}_pred-img-mask': 
+                                 [wandb.Image(pred[0, 0, :, :]), wandb.Image(img[0, :3, :, :]), wandb.Image(mask[0, 0, :, :])]})
+                
+                ## Metric ##
+                depth_criterion = criteria.MaskedMSELoss().to(pred.device)
+                metric = depth_criterion(pred, mask.to(pred.device)).cpu().detach().numpy()
+                accelerator.log({'val_metric_step': metric})  # Log loss to wandb
+                running_metric += metric; counter +=img.size(0)
+                # print(f"metric.item(): {metric.item()}")    # metric.item(): 5.129260540008545
+                # print(f"metric: {metric}")  # metric: 5.129260540008545
+            epoch_metric = running_metric / counter
+            accelerator.log({'val_metric_epoch': epoch_metric})  # Log loss to wandb
+            print(f"Epoch {epoch+1}/{args.epochs} Evaluation End. Average Evaluation Metric: {epoch_metric:.4f}")
+
+            # metric = get_metric(args)
+            # metric = metric(args)
+            # summary = get_summary(args)
+            # writer_val = summary(args.save_dir, 'val', args, loss.loss_name, metric.metric_name)
+            # for (img, mask) in tqdm(loader_val):
+            #     pred = diffusion.sample(img).cpu().detach().numpy()             # inference
+            #     metric_val = metric.evaluate({"gt":mask}, {"pred":pred}, 'val') # metric
+            #     writer_val.add(loss_val, metric_val)
+            # writer_val.update(epoch, sample, output)
+            # # writer_val.save(epoch, batch, sample, output)
+
+            torch.set_grad_enabled(True)
+
 
 
 if __name__ == '__main__':

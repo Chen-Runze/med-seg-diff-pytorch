@@ -10,10 +10,12 @@ input_img_channels = 4
 
 # UNet
 dim_mults = (1, 2, 4, 8)
-timesteps=1000
+timesteps=100
 
-epochs=151
+epochs=150
 batch_size=5
 learning_rate=1e-4
 
-save_every=10
+test_only=False
+save_every=1
+eval_every=1
